@@ -1,0 +1,13 @@
+[package]
+name = "lazylogger"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aws-config = "1.8.5"
+aws-sdk-ecs = "1.94.1"
+color-eyre = "0.6.5"
+crossterm = "0.29.0"
+dirs = "6.0.0"
+ratatui = "0.29.0"
+tokio = { version = "1.47.1", features = ["full"] }
