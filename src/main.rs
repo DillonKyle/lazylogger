@@ -8,6 +8,7 @@ use aws_sdk_ecs::{
 };
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyCode};
+use itertools::Itertools;
 use ratatui::{
     Frame, Terminal,
     crossterm::{
@@ -19,7 +20,10 @@ use ratatui::{
     prelude::{Backend, CrosstermBackend},
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        ScrollbarState, Wrap,
+    },
 };
 use std::{
     error,
@@ -71,13 +75,8 @@ impl OptionList {
 
     pub fn next(&mut self) {
         let i = match self.state.selected() {
-            Some(i) => {
-                if i >= self.items.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
+            Some(i) if i < self.items.len() - 1 => i + 1,
+            Some(i) => i,
             None => 0,
         };
         self.state.select(Some(i));
@@ -85,13 +84,8 @@ impl OptionList {
 
     pub fn previous(&mut self) {
         let i = match self.state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.items.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) if i > 0 => i - 1,
+            Some(i) => i,
             None => 0,
         };
         self.state.select(Some(i));
@@ -127,10 +121,65 @@ pub enum CurrentScreen {
     Exiting,
 }
 
+pub struct ProfileBox {
+    pub vertical_scroll_state: ScrollbarState,
+    pub vertical_scroll: usize,
+}
+
+pub struct ClusterBox {
+    pub vertical_scroll_state: ScrollbarState,
+    pub vertical_scroll: usize,
+}
+
+pub struct ServiceBox {
+    pub vertical_scroll_state: ScrollbarState,
+    pub vertical_scroll: usize,
+}
+
+pub struct EventLogBox {
+    pub vertical_scroll_state: ScrollbarState,
+    pub vertical_scroll: usize,
+}
+
 pub enum SettingConfig {
-    Profile,
-    Cluster,
-    Service,
+    ProfileBox,
+    ClusterBox,
+    ServiceBox,
+}
+
+pub struct Theme {
+    pub background: Color,
+    pub current_line: Color,
+    pub selection: Color,
+    pub foreground: Color,
+    pub comment: Color,
+    pub red: Color,
+    pub orange: Color,
+    pub yellow: Color,
+    pub green: Color,
+    pub cyan: Color,
+    pub purple: Color,
+    pub pink: Color,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        //Dracula Theme
+        Theme {
+            background: Color::Rgb(40, 42, 54),
+            current_line: Color::Rgb(98, 114, 164),
+            selection: Color::Rgb(68, 71, 90),
+            foreground: Color::Rgb(248, 248, 242),
+            comment: Color::Rgb(98, 114, 164),
+            red: Color::Rgb(255, 85, 85),
+            orange: Color::Rgb(255, 184, 108),
+            yellow: Color::Rgb(241, 250, 140),
+            green: Color::Rgb(80, 250, 123),
+            cyan: Color::Rgb(139, 233, 253),
+            purple: Color::Rgb(189, 147, 249),
+            pink: Color::Rgb(255, 121, 198),
+        }
+    }
 }
 
 pub struct App {
@@ -141,9 +190,14 @@ pub struct App {
     pub clusters: OptionList,
     pub service: String,
     pub services: OptionList,
-    pub service_events: Vec<String>,
+    pub service_events: OptionList,
     pub current_screen: CurrentScreen,
     pub setting_config: Option<SettingConfig>,
+    pub profile_box: ProfileBox,
+    pub cluster_box: ClusterBox,
+    pub service_box: ServiceBox,
+    pub event_box: EventLogBox,
+    pub viewing_logs: bool,
 }
 
 impl Default for App {
@@ -162,9 +216,26 @@ impl App {
             clusters: OptionList::new(),
             service: String::new(),
             services: OptionList::new(),
-            service_events: Vec::new(),
+            service_events: OptionList::new(),
             current_screen: CurrentScreen::Main,
             setting_config: None,
+            profile_box: ProfileBox {
+                vertical_scroll_state: ScrollbarState::default(),
+                vertical_scroll: 0,
+            },
+            cluster_box: ClusterBox {
+                vertical_scroll_state: ScrollbarState::default(),
+                vertical_scroll: 0,
+            },
+            service_box: ServiceBox {
+                vertical_scroll_state: ScrollbarState::default(),
+                vertical_scroll: 0,
+            },
+            event_box: EventLogBox {
+                vertical_scroll_state: ScrollbarState::default(),
+                vertical_scroll: 0,
+            },
+            viewing_logs: false,
         }
     }
 
@@ -184,10 +255,48 @@ impl App {
                         CurrentScreen::Main => match key.code {
                             KeyCode::Char('c') => {
                                 self.current_screen = CurrentScreen::SettingConfig;
-                                self.setting_config = Some(SettingConfig::Profile);
+                                self.setting_config = Some(SettingConfig::ProfileBox);
                             }
                             KeyCode::Char('q') => {
                                 self.current_screen = CurrentScreen::Exiting;
+                            }
+                            KeyCode::Char('e') => {
+                                self.viewing_logs = !self.viewing_logs;
+                            }
+                            KeyCode::Char('r') => {
+                                if self.viewing_logs {
+                                    self.service_events = OptionList::new();
+                                }
+                            }
+                            KeyCode::Down => {
+                                if self.viewing_logs {
+                                    let previously_selected = self.service_events.state.selected();
+                                    self.service_events.next();
+
+                                    if self.service_events.state.selected() != previously_selected {
+                                        self.event_box.vertical_scroll =
+                                            self.event_box.vertical_scroll.saturating_add(1);
+                                        self.event_box.vertical_scroll_state = self
+                                            .event_box
+                                            .vertical_scroll_state
+                                            .position(self.event_box.vertical_scroll);
+                                    }
+                                }
+                            }
+                            KeyCode::Up => {
+                                if self.viewing_logs {
+                                    let previously_selected = self.service_events.state.selected();
+                                    self.service_events.previous();
+
+                                    if self.service_events.state.selected() != previously_selected {
+                                        self.event_box.vertical_scroll =
+                                            self.event_box.vertical_scroll.saturating_sub(1);
+                                        self.event_box.vertical_scroll_state = self
+                                            .event_box
+                                            .vertical_scroll_state
+                                            .position(self.event_box.vertical_scroll);
+                                    }
+                                }
                             }
                             _ => {}
                         },
@@ -196,7 +305,7 @@ impl App {
                                 return Ok(true);
                             }
                             KeyCode::Char('n') | KeyCode::Char('q') => {
-                                return Ok(false);
+                                self.current_screen = CurrentScreen::Main;
                             }
                             _ => {}
                         },
@@ -215,28 +324,30 @@ impl App {
                             KeyCode::Enter => {
                                 if let Some(setting_config) = &self.setting_config {
                                     match setting_config {
-                                        SettingConfig::Profile => {
+                                        SettingConfig::ProfileBox => {
                                             if self.profiles.selected().is_some() {
                                                 self.profile =
                                                     self.profiles.selected().unwrap().to_string();
-                                                self.setting_config = Some(SettingConfig::Cluster);
+                                                self.setting_config =
+                                                    Some(SettingConfig::ClusterBox);
                                                 self.clusters = OptionList::new();
                                                 self.services = OptionList::new();
                                                 self.cluster.clear();
                                                 self.service.clear();
-                                                self.service_events.clear();
+                                                self.service_events = OptionList::new();
                                             }
                                         }
-                                        SettingConfig::Cluster => {
+                                        SettingConfig::ClusterBox => {
                                             if self.clusters.selected().is_some() {
                                                 self.cluster =
                                                     self.clusters.selected().unwrap().to_string();
-                                                self.setting_config = Some(SettingConfig::Service);
+                                                self.setting_config =
+                                                    Some(SettingConfig::ServiceBox);
                                                 self.services = OptionList::new();
                                                 self.service.clear();
                                             }
                                         }
-                                        SettingConfig::Service => {
+                                        SettingConfig::ServiceBox => {
                                             if self.services.selected().is_some() {
                                                 self.service =
                                                     self.services.selected().unwrap().to_string();
@@ -250,14 +361,54 @@ impl App {
                             KeyCode::Down => {
                                 if let Some(setting_config) = &self.setting_config {
                                     match setting_config {
-                                        SettingConfig::Profile => {
+                                        SettingConfig::ProfileBox => {
+                                            let previously_selected =
+                                                self.profiles.state.selected();
                                             self.profiles.next();
+
+                                            if self.profiles.state.selected() != previously_selected
+                                            {
+                                                self.profile_box.vertical_scroll = self
+                                                    .profile_box
+                                                    .vertical_scroll
+                                                    .saturating_add(1);
+                                                self.profile_box.vertical_scroll_state = self
+                                                    .profile_box
+                                                    .vertical_scroll_state
+                                                    .position(self.profile_box.vertical_scroll);
+                                            }
                                         }
-                                        SettingConfig::Cluster => {
+                                        SettingConfig::ClusterBox => {
+                                            let previously_selected =
+                                                self.clusters.state.selected();
                                             self.clusters.next();
+                                            if self.clusters.state.selected() != previously_selected
+                                            {
+                                                self.cluster_box.vertical_scroll = self
+                                                    .cluster_box
+                                                    .vertical_scroll
+                                                    .saturating_add(1);
+                                                self.cluster_box.vertical_scroll_state = self
+                                                    .cluster_box
+                                                    .vertical_scroll_state
+                                                    .position(self.cluster_box.vertical_scroll);
+                                            }
                                         }
-                                        SettingConfig::Service => {
+                                        SettingConfig::ServiceBox => {
+                                            let previously_selected =
+                                                self.services.state.selected();
                                             self.services.next();
+                                            if self.services.state.selected() != previously_selected
+                                            {
+                                                self.service_box.vertical_scroll = self
+                                                    .service_box
+                                                    .vertical_scroll
+                                                    .saturating_add(1);
+                                                self.service_box.vertical_scroll_state = self
+                                                    .service_box
+                                                    .vertical_scroll_state
+                                                    .position(self.service_box.vertical_scroll);
+                                            }
                                         }
                                     }
                                 }
@@ -265,14 +416,53 @@ impl App {
                             KeyCode::Up => {
                                 if let Some(setting_config) = &self.setting_config {
                                     match setting_config {
-                                        SettingConfig::Profile => {
+                                        SettingConfig::ProfileBox => {
+                                            let previously_selected =
+                                                self.profiles.state.selected();
                                             self.profiles.previous();
+                                            if self.profiles.state.selected() != previously_selected
+                                            {
+                                                self.profile_box.vertical_scroll = self
+                                                    .profile_box
+                                                    .vertical_scroll
+                                                    .saturating_sub(1);
+                                                self.profile_box.vertical_scroll_state = self
+                                                    .profile_box
+                                                    .vertical_scroll_state
+                                                    .position(self.profile_box.vertical_scroll);
+                                            }
                                         }
-                                        SettingConfig::Cluster => {
+                                        SettingConfig::ClusterBox => {
+                                            let previously_selected =
+                                                self.clusters.state.selected();
                                             self.clusters.previous();
+                                            if self.clusters.state.selected() != previously_selected
+                                            {
+                                                self.cluster_box.vertical_scroll = self
+                                                    .cluster_box
+                                                    .vertical_scroll
+                                                    .saturating_sub(1);
+                                                self.cluster_box.vertical_scroll_state = self
+                                                    .cluster_box
+                                                    .vertical_scroll_state
+                                                    .position(self.cluster_box.vertical_scroll);
+                                            }
                                         }
-                                        SettingConfig::Service => {
+                                        SettingConfig::ServiceBox => {
+                                            let previously_selected =
+                                                self.services.state.selected();
                                             self.services.previous();
+                                            if self.services.state.selected() != previously_selected
+                                            {
+                                                self.service_box.vertical_scroll = self
+                                                    .service_box
+                                                    .vertical_scroll
+                                                    .saturating_sub(1);
+                                                self.service_box.vertical_scroll_state = self
+                                                    .service_box
+                                                    .vertical_scroll_state
+                                                    .position(self.service_box.vertical_scroll);
+                                            }
                                         }
                                     }
                                 }
@@ -299,7 +489,11 @@ impl App {
 
     async fn on_tick(&mut self) {
         if let CurrentScreen::Main = &self.current_screen {
-            if !self.profile.is_empty() && !self.cluster.is_empty() && !self.service.is_empty() {
+            if !self.profile.is_empty()
+                && !self.cluster.is_empty()
+                && !self.service.is_empty()
+                && self.service_events.items.is_empty()
+            {
                 let aws_config = aws_config::defaults(BehaviorVersion::latest())
                     .region("us-east-1")
                     .profile_name(&self.profile)
@@ -313,7 +507,11 @@ impl App {
                             .find(|s| s.service_name().unwrap_or_default() == self.service)
                         {
                             if let Ok(events) = get_events(service_obj).await {
-                                self.service_events = events;
+                                self.service_events = OptionList::from_iter(events);
+                                self.event_box.vertical_scroll_state = self
+                                    .event_box
+                                    .vertical_scroll_state
+                                    .content_length(self.service_events.items.len());
                             }
                         }
                     }
@@ -321,20 +519,24 @@ impl App {
             }
         }
         if let CurrentScreen::SettingConfig = &self.current_screen {
-            if !self.service_events.is_empty() {
-                self.service_events.clear();
+            if !self.service_events.items.is_empty() {
+                self.service_events = OptionList::new();
             }
         }
         if let Some(setting_config) = &self.setting_config {
             match setting_config {
-                SettingConfig::Profile => {
+                SettingConfig::ProfileBox => {
                     if self.profiles.items.is_empty() {
                         // Load profiles if not already loaded
                         let profiles = get_profiles().await.unwrap();
                         self.profiles = OptionList::from_iter(profiles);
+                        self.profile_box.vertical_scroll_state = self
+                            .profile_box
+                            .vertical_scroll_state
+                            .content_length(self.profiles.items.len());
                     }
                 }
-                SettingConfig::Cluster => {
+                SettingConfig::ClusterBox => {
                     if !self.profile.is_empty() && self.clusters.items.is_empty() {
                         let aws_config = aws_config::defaults(BehaviorVersion::latest())
                             .region("us-east-1")
@@ -351,9 +553,13 @@ impl App {
                                 .map(|c| c.cluster_name().unwrap().to_string())
                                 .collect::<Vec<String>>(),
                         );
+                        self.cluster_box.vertical_scroll_state = self
+                            .cluster_box
+                            .vertical_scroll_state
+                            .content_length(self.clusters.items.len());
                     }
                 }
-                SettingConfig::Service => {
+                SettingConfig::ServiceBox => {
                     if !self.profile.is_empty()
                         && !self.cluster.is_empty()
                         && self.services.items.is_empty()
@@ -373,6 +579,10 @@ impl App {
                                 .map(|s| s.service_name().unwrap().to_string())
                                 .collect::<Vec<String>>(),
                         );
+                        self.service_box.vertical_scroll_state = self
+                            .service_box
+                            .vertical_scroll_state
+                            .content_length(self.services.items.len());
                     }
                 }
             }
@@ -382,18 +592,18 @@ impl App {
     pub fn toggle_setting(&mut self) {
         if let Some(config_mode) = &self.setting_config {
             match config_mode {
-                SettingConfig::Profile => {
-                    self.setting_config = Some(SettingConfig::Cluster);
+                SettingConfig::ProfileBox => {
+                    self.setting_config = Some(SettingConfig::ClusterBox);
                 }
-                SettingConfig::Cluster => {
-                    self.setting_config = Some(SettingConfig::Service);
+                SettingConfig::ClusterBox => {
+                    self.setting_config = Some(SettingConfig::ServiceBox);
                 }
-                SettingConfig::Service => {
-                    self.setting_config = Some(SettingConfig::Profile);
+                SettingConfig::ServiceBox => {
+                    self.setting_config = Some(SettingConfig::ProfileBox);
                 }
             }
         } else {
-            self.setting_config = Some(SettingConfig::Profile);
+            self.setting_config = Some(SettingConfig::ProfileBox);
         }
     }
 }
@@ -418,7 +628,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-pub fn ui(frame: &mut Frame, app: &App) {
+pub fn ui(frame: &mut Frame, app: &mut App) {
+    let background = Block::default().style(Style::default().bg(Theme::default().background));
+    frame.render_widget(background, frame.area());
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
@@ -435,60 +648,110 @@ pub fn ui(frame: &mut Frame, app: &App) {
 
     let title = Paragraph::new(Text::styled(
         "LazyLogger",
-        Style::default().fg(Color::Green),
+        Style::default()
+            .bg(Theme::default().background)
+            .fg(Theme::default().green),
     ))
     .block(title_block);
 
     frame.render_widget(title, chunks[0]);
 
-    let event_block = Block::default()
-        .title("Service Events")
-        .borders(Borders::ALL)
-        .style(Style::default());
+    let mut event_block = Block::default()
+        .title(" Service Events - (e) to focus ")
+        .borders(Borders::ALL);
+
+    if app.viewing_logs && !app.service_events.items.is_empty() {
+        event_block = Block::default()
+            .title(" Service Events - (e) to unfocus - (r) to refresh ")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Theme::default().green));
+    } else if app.viewing_logs && app.service_events.items.is_empty() {
+        event_block = Block::default()
+            .title(" Service Events - (e) to unfocus ")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Theme::default().green));
+    }
 
     let event_items: Vec<ListItem> = app
         .service_events
+        .items
         .iter()
         .map(|item| {
             ListItem::new(Line::from(Span::styled(
                 item,
-                Style::default().fg(Color::White),
+                Style::default().fg(Theme::default().foreground),
             )))
         })
         .collect();
 
-    let event_list = List::new(event_items).block(event_block);
+    let event_list = List::new(event_items)
+        .block(event_block.clone())
+        .highlight_symbol(">> ");
 
-    frame.render_widget(event_list, chunks[1]);
+    let event_list_scrollbar = Scrollbar::default()
+        .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+        .style(Style::default().bg(Theme::default().selection));
+
+    if !app.profile.is_empty()
+        && !app.cluster.is_empty()
+        && !app.service.is_empty()
+        && event_list.is_empty()
+    {
+        let loading_block = Paragraph::new("Loading Service Event Logs...")
+            .style(Style::default().fg(Theme::default().yellow))
+            .block(event_block);
+        frame.render_widget(loading_block, chunks[1]);
+    } else if event_list.is_empty() {
+        let idle_block = Paragraph::new("Configure Data Source to View Logs").block(event_block);
+        frame.render_widget(idle_block, chunks[1]);
+    } else {
+        frame.render_stateful_widget(event_list, chunks[1], &mut app.service_events.state);
+        frame.render_stateful_widget(
+            event_list_scrollbar,
+            chunks[1],
+            &mut app.event_box.vertical_scroll_state,
+        );
+    }
 
     let current_navigation_text = vec![
         // The first half of the text
         match app.current_screen {
-            CurrentScreen::Main => Span::styled("Normal Mode", Style::default().fg(Color::Green)),
-            CurrentScreen::SettingConfig => {
-                Span::styled("Set Config", Style::default().fg(Color::Yellow))
+            CurrentScreen::Main => {
+                Span::styled("Logging Mode", Style::default().fg(Theme::default().green))
             }
-            CurrentScreen::Exiting => Span::styled("Exiting", Style::default().fg(Color::LightRed)),
+            CurrentScreen::SettingConfig => Span::styled(
+                "Set Data Source",
+                Style::default().fg(Theme::default().yellow),
+            ),
+            CurrentScreen::Exiting => {
+                Span::styled("Exiting", Style::default().fg(Theme::default().red))
+            }
         }
         .to_owned(),
         // A white divider bar to separate the two sections
-        Span::styled(" | ", Style::default().fg(Color::White)),
+        Span::styled(" | ", Style::default().fg(Theme::default().foreground)),
         // The final section of the text, with hints on what the user is editing
         {
             if let Some(setting_config) = &app.setting_config {
                 match setting_config {
-                    SettingConfig::Profile => {
-                        Span::styled("Setting AWS Profile", Style::default().fg(Color::Green))
-                    }
-                    SettingConfig::Cluster => {
-                        Span::styled("Setting ECS Cluster", Style::default().fg(Color::Green))
-                    }
-                    SettingConfig::Service => {
-                        Span::styled("Setting ECS Service", Style::default().fg(Color::Green))
-                    }
+                    SettingConfig::ProfileBox => Span::styled(
+                        "Setting AWS Profile",
+                        Style::default().fg(Theme::default().green),
+                    ),
+                    SettingConfig::ClusterBox => Span::styled(
+                        "Setting ECS Cluster",
+                        Style::default().fg(Theme::default().green),
+                    ),
+                    SettingConfig::ServiceBox => Span::styled(
+                        "Setting ECS Service",
+                        Style::default().fg(Theme::default().green),
+                    ),
                 }
             } else {
-                Span::styled("Not Setting Anything", Style::default().fg(Color::DarkGray))
+                Span::styled(
+                    "Not Setting Anything",
+                    Style::default().fg(Theme::default().comment),
+                )
             }
         },
     ];
@@ -499,16 +762,16 @@ pub fn ui(frame: &mut Frame, app: &App) {
     let current_keys_hint = {
         match app.current_screen {
             CurrentScreen::Main => Span::styled(
-                "(q) to quit / (c) to config",
-                Style::default().fg(Color::Red),
+                "(q) to quit / (c) to config data source",
+                Style::default().fg(Theme::default().red),
             ),
             CurrentScreen::SettingConfig => Span::styled(
                 "(ESC) to cancel/(Tab) to switch boxes/enter to complete",
-                Style::default().fg(Color::Red),
+                Style::default().fg(Theme::default().red),
             ),
             CurrentScreen::Exiting => Span::styled(
-                "(q) to quit / (c) to config",
-                Style::default().fg(Color::Red),
+                "(q) to quit / (c) to config data source",
+                Style::default().fg(Theme::default().red),
             ),
         }
     };
@@ -525,9 +788,9 @@ pub fn ui(frame: &mut Frame, app: &App) {
     frame.render_widget(key_notes_footer, footer_chunks[1]);
     if let Some(setting_config) = &app.setting_config {
         let popup_block = Block::default()
-            .title("Setting Configuration")
+            .title("Setting Data Source")
             .borders(Borders::NONE)
-            .style(Style::default().bg(Color::DarkGray));
+            .style(Style::default().bg(Theme::default().selection));
 
         let area = centered_rect(60, 25, frame.area());
         frame.render_widget(popup_block, area);
@@ -545,16 +808,16 @@ pub fn ui(frame: &mut Frame, app: &App) {
         let mut cluster_block = Block::default().title("ECS Cluster").borders(Borders::ALL);
         let mut service_block = Block::default().title("ECS Service").borders(Borders::ALL);
 
-        let active_style = Style::default().fg(Color::Green);
+        let active_style = Style::default().fg(Theme::default().green);
 
         match setting_config {
-            SettingConfig::Profile => {
+            SettingConfig::ProfileBox => {
                 profile_block = profile_block.style(active_style);
             }
-            SettingConfig::Cluster => {
+            SettingConfig::ClusterBox => {
                 cluster_block = cluster_block.style(active_style);
             }
-            SettingConfig::Service => {
+            SettingConfig::ServiceBox => {
                 service_block = service_block.style(active_style);
             }
         }
@@ -567,17 +830,23 @@ pub fn ui(frame: &mut Frame, app: &App) {
                 if app.profile == *item {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black).bg(Color::Green),
+                        Style::default()
+                            .fg(Theme::default().background)
+                            .bg(Theme::default().green),
                     )))
                 } else if Some(item) == app.profiles.selected() {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black).bg(Color::LightYellow),
+                        Style::default()
+                            .fg(Theme::default().foreground)
+                            .bg(Theme::default().current_line),
                     )))
                 } else {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black),
+                        Style::default()
+                            .fg(Theme::default().foreground)
+                            .bg(Theme::default().selection),
                     )))
                 }
             })
@@ -587,7 +856,16 @@ pub fn ui(frame: &mut Frame, app: &App) {
             .block(profile_block)
             .highlight_symbol(">> ");
 
-        frame.render_widget(profile_list, popup_chunks[0]);
+        let profile_list_scrollbar = Scrollbar::default()
+            .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+            .style(Style::default().bg(Theme::default().selection));
+
+        frame.render_stateful_widget(profile_list, popup_chunks[0], &mut app.profiles.state);
+        frame.render_stateful_widget(
+            profile_list_scrollbar,
+            popup_chunks[0],
+            &mut app.profile_box.vertical_scroll_state,
+        );
 
         let cluster_items: Vec<ListItem> = app
             .clusters
@@ -597,27 +875,53 @@ pub fn ui(frame: &mut Frame, app: &App) {
                 if app.cluster == *item {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black).bg(Color::Green),
+                        Style::default()
+                            .fg(Theme::default().background)
+                            .bg(Theme::default().green),
                     )))
                 } else if Some(item) == app.clusters.selected() {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black).bg(Color::LightYellow),
+                        Style::default()
+                            .fg(Theme::default().foreground)
+                            .bg(Theme::default().current_line),
                     )))
                 } else {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black),
+                        Style::default()
+                            .fg(Theme::default().foreground)
+                            .bg(Theme::default().selection),
                     )))
                 }
             })
             .collect();
 
+        let cluster_list_scrollbar = Scrollbar::default()
+            .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+            .style(Style::default().bg(Theme::default().selection));
+
         let cluster_list = List::new(cluster_items)
-            .block(cluster_block)
+            .block(cluster_block.clone())
             .highlight_symbol(">> ");
 
-        frame.render_widget(cluster_list, popup_chunks[1]);
+        if !app.profile.is_empty() && cluster_list.is_empty() {
+            let loading_block = Paragraph::new("Loading Clusters...")
+                .style(
+                    Style::default()
+                        .bg(Theme::default().selection)
+                        .fg(Theme::default().yellow),
+                )
+                .block(cluster_block);
+            frame.render_widget(loading_block, popup_chunks[1]);
+        } else {
+            frame.render_stateful_widget(cluster_list, popup_chunks[1], &mut app.clusters.state);
+            frame.render_stateful_widget(
+                cluster_list_scrollbar,
+                popup_chunks[1],
+                &mut app.cluster_box.vertical_scroll_state,
+            );
+        }
 
         let service_items: Vec<ListItem> = app
             .services
@@ -627,38 +931,64 @@ pub fn ui(frame: &mut Frame, app: &App) {
                 if app.service == *item {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black).bg(Color::Green),
+                        Style::default()
+                            .fg(Theme::default().background)
+                            .bg(Theme::default().green),
                     )))
                 } else if Some(item) == app.services.selected() {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black).bg(Color::LightYellow),
+                        Style::default()
+                            .fg(Theme::default().foreground)
+                            .bg(Theme::default().current_line),
                     )))
                 } else {
                     ListItem::new(Line::from(Span::styled(
                         item,
-                        Style::default().fg(Color::Black),
+                        Style::default()
+                            .fg(Theme::default().foreground)
+                            .bg(Theme::default().selection),
                     )))
                 }
             })
             .collect();
 
         let service_list = List::new(service_items)
-            .block(service_block)
+            .block(service_block.clone())
             .highlight_symbol(">> ");
+        let service_list_scrollbar = Scrollbar::default()
+            .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+            .style(Style::default().bg(Theme::default().selection));
 
-        frame.render_widget(service_list, popup_chunks[2]);
+        if !app.cluster.is_empty() && service_list.is_empty() {
+            let loading_block = Paragraph::new("Loading Services...")
+                .style(
+                    Style::default()
+                        .bg(Theme::default().selection)
+                        .fg(Theme::default().yellow),
+                )
+                .block(service_block);
+            frame.render_widget(loading_block, popup_chunks[2]);
+        } else {
+            frame.render_stateful_widget(service_list, popup_chunks[2], &mut app.services.state);
+            frame.render_stateful_widget(
+                service_list_scrollbar,
+                popup_chunks[2],
+                &mut app.service_box.vertical_scroll_state,
+            );
+        }
     }
     if let CurrentScreen::Exiting = app.current_screen {
         frame.render_widget(Clear, frame.area()); //this clears the entire screen and anything already drawn
         let popup_block = Block::default()
-            .title("Exit LazyLogger")
-            .borders(Borders::NONE)
-            .style(Style::default().bg(Color::DarkGray));
+            .title(" Exit LazyLogger ")
+            .padding(Padding::new(2, 2, 2, 2))
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Theme::default().selection));
 
         let exit_text = Text::styled(
             "Are you sure you want to exit? (y/n)",
-            Style::default().fg(Color::Red),
+            Style::default().fg(Theme::default().red),
         );
         // the `trim: false` will stop the text from being cut off when over the edge of the block
         let exit_paragraph = Paragraph::new(exit_text)
@@ -681,15 +1011,17 @@ async fn get_profiles() -> Result<Vec<String>, Box<dyn error::Error>> {
             profiles.push(profile.to_string());
         }
     }
+    profiles.sort();
     Ok(profiles)
 }
 
 async fn get_clusters(client: &Client) -> Result<DescribeClustersOutput, Error> {
     let resp = client.list_clusters().send().await?;
-    let cluster_arns = resp.cluster_arns();
+    let mut cluster_arns = resp.cluster_arns().to_vec();
+    cluster_arns.sort();
     let cluster = client
         .describe_clusters()
-        .set_clusters(Some(cluster_arns.into()))
+        .set_clusters(Some(cluster_arns))
         .send()
         .await?;
     Ok(cluster)
@@ -699,15 +1031,46 @@ async fn get_services(
     client: &Client,
     cluster_name: &str,
 ) -> Result<DescribeServicesOutput, Error> {
-    let resp = client.list_services().cluster(cluster_name).send().await?;
-    let service_arns = resp.service_arns();
-    let services = client
-        .describe_services()
-        .cluster(cluster_name)
-        .set_services(Some(service_arns.into()))
-        .send()
-        .await?;
-    Ok(services)
+    let mut next_token = None;
+    let mut service_arns: Vec<String> = Vec::new();
+
+    loop {
+        let resp = client
+            .list_services()
+            .cluster(cluster_name)
+            .set_next_token(next_token.clone())
+            .send()
+            .await?;
+
+        service_arns.extend(resp.service_arns().to_vec());
+
+        if let Some(token) = resp.next_token() {
+            next_token = Some(token.to_string());
+        } else {
+            break;
+        }
+    }
+
+    service_arns.sort();
+    let mut all_services: Vec<_> = Vec::new();
+
+    for chunk in &service_arns.into_iter().chunks(10) {
+        let resp = client
+            .describe_services()
+            .cluster(cluster_name)
+            .set_services(Some(chunk.collect()))
+            .send()
+            .await?;
+        if let Some(s) = resp.services {
+            all_services.extend(s);
+        }
+    }
+
+    let output = DescribeServicesOutput::builder()
+        .set_services(Some(all_services))
+        .build();
+
+    Ok(output)
 }
 
 /*
