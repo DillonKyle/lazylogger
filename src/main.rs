@@ -660,12 +660,18 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
         .title(" Service Events - (e) to focus ")
         .borders(Borders::ALL);
 
-    if app.viewing_logs && !app.service_events.items.is_empty() {
+    if app.viewing_logs
+        && !app.service_events.items.is_empty()
+        && matches!(app.current_screen, CurrentScreen::Main)
+    {
         event_block = Block::default()
             .title(" Service Events - (e) to unfocus - (r) to refresh ")
             .borders(Borders::ALL)
             .style(Style::default().fg(Theme::default().green));
-    } else if app.viewing_logs && app.service_events.items.is_empty() {
+    } else if app.viewing_logs
+        && app.service_events.items.is_empty()
+        && matches!(app.current_screen, CurrentScreen::Main)
+    {
         event_block = Block::default()
             .title(" Service Events - (e) to unfocus ")
             .borders(Borders::ALL)
@@ -696,6 +702,7 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
         && !app.cluster.is_empty()
         && !app.service.is_empty()
         && event_list.is_empty()
+        && matches!(app.current_screen, CurrentScreen::Main)
     {
         let loading_block = Paragraph::new("Loading Service Event Logs...")
             .style(Style::default().fg(Theme::default().yellow))
