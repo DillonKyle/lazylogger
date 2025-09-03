@@ -1,5 +1,5 @@
+use aws_sdk_cloudwatchlogs as cloudwatch;
 use aws_sdk_ecs::{
-    Client, Error,
     operation::{
         describe_clusters::DescribeClustersOutput, describe_services::DescribeServicesOutput,
     },
@@ -27,7 +27,9 @@ pub async fn get_profiles() -> Result<Vec<String>, Box<dyn error::Error>> {
     Ok(profiles)
 }
 
-pub async fn get_clusters(client: &Client) -> Result<DescribeClustersOutput, Error> {
+pub async fn get_clusters(
+    client: &aws_sdk_ecs::Client,
+) -> Result<DescribeClustersOutput, aws_sdk_ecs::Error> {
     let resp = client.list_clusters().send().await?;
     let mut cluster_arns = resp.cluster_arns().to_vec();
     cluster_arns.sort();
@@ -40,9 +42,9 @@ pub async fn get_clusters(client: &Client) -> Result<DescribeClustersOutput, Err
 }
 
 pub async fn get_services(
-    client: &Client,
+    client: &aws_sdk_ecs::Client,
     cluster_name: &str,
-) -> Result<DescribeServicesOutput, Error> {
+) -> Result<DescribeServicesOutput, aws_sdk_ecs::Error> {
     let mut next_token = None;
     let mut service_arns: Vec<String> = Vec::new();
 
@@ -85,38 +87,42 @@ pub async fn get_services(
     Ok(output)
 }
 
-/*
-async fn get_tasks(
-    client: &Client,
-    cluster_name: &str,
-    service_name: &str,
-) -> Result<DescribeTasksOutput, Error> {
-    let resp = client
-        .list_tasks()
-        .cluster(cluster_name)
-        .service_name(service_name)
+pub async fn get_log_group_name(
+    ecs_client: &aws_sdk_ecs::Client,
+    service: &Service,
+) -> Result<String, aws_sdk_ecs::Error> {
+    let task_def_arn = service.task_definition().unwrap();
+    let task_def = ecs_client
+        .describe_task_definition()
+        .task_definition(task_def_arn)
         .send()
         .await?;
-    let task_arns = resp.task_arns();
-    let tasks = client
-        .describe_tasks()
-        .cluster(cluster_name)
-        .set_tasks(Some(task_arns.into()))
-        .send()
-        .await?;
-    Ok(tasks)
+    let container_defs = task_def.task_definition().unwrap().container_definitions();
+    let log_config = container_defs[0].log_configuration().unwrap();
+    let log_group = log_config.options().unwrap().get("awslogs-group").unwrap();
+    Ok(log_group.clone())
 }
-*/
 
-pub async fn get_events(service: &Service) -> Result<Vec<String>, Error> {
-    let logs = service.events();
-    let mut formatted_logs = Vec::new();
-    for entry in logs {
-        formatted_logs.push(format!(
-            "[{}] {}",
-            entry.created_at().unwrap(),
-            entry.message().unwrap(),
-        ));
+pub async fn get_logs(
+    cw_client: &cloudwatch::Client,
+    log_group: &String,
+) -> Result<Vec<String>, cloudwatch::Error> {
+    let log_events = cw_client
+        .filter_log_events()
+        .log_group_name(log_group)
+        .limit(500)
+        .send()
+        .await;
+    let mut logs = Vec::new();
+    if let Some(events) = log_events.unwrap().events {
+        for event in events {
+            logs.push(format!(
+                "[{}] {}",
+                event.timestamp.unwrap(),
+                event.message.unwrap()
+            ));
+        }
     }
-    Ok(formatted_logs)
+
+    Ok(logs)
 }

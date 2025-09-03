@@ -1,10 +1,12 @@
-use crate::keymaps::main_screen_keymaps;
+use crate::keymaps::{
+    exit_screen_keymaps, log_details_keymaps, main_screen_keymaps, setting_config_keymaps,
+};
 use crate::ui::ui;
 
-use crate::aws_utils::{get_clusters, get_events, get_profiles, get_services};
+use crate::aws_utils::{get_clusters, get_log_group_name, get_logs, get_profiles, get_services};
 use aws_config::BehaviorVersion;
 use aws_sdk_ecs::Client;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event};
 use ratatui::{
     Terminal,
     prelude::Backend,
@@ -77,6 +79,7 @@ pub enum CurrentScreen {
     Main,
     SettingConfig,
     Exiting,
+    LogDetails,
 }
 
 pub struct ProfileBox {
@@ -211,173 +214,17 @@ impl App {
                         CurrentScreen::Main => {
                             main_screen_keymaps(key, self);
                         }
-                        CurrentScreen::Exiting => match key.code {
-                            KeyCode::Char('y') => {
+                        CurrentScreen::Exiting => {
+                            if exit_screen_keymaps(key, self)? {
                                 return Ok(true);
                             }
-                            KeyCode::Char('n') | KeyCode::Char('q') => {
-                                self.current_screen = CurrentScreen::Main;
-                            }
-                            _ => {}
-                        },
-                        CurrentScreen::SettingConfig => match key.code {
-                            KeyCode::Esc => {
-                                self.current_screen = CurrentScreen::Main;
-                                self.setting_config = None;
-                            }
-                            KeyCode::Tab => {
-                                self.toggle_setting();
-                            }
-                            KeyCode::Char('q') => {
-                                self.current_screen = CurrentScreen::Main;
-                                self.setting_config = None;
-                            }
-                            KeyCode::Enter => {
-                                if let Some(setting_config) = &self.setting_config {
-                                    match setting_config {
-                                        SettingConfig::Profile => {
-                                            if self.profiles.selected().is_some() {
-                                                self.profile =
-                                                    self.profiles.selected().unwrap().to_string();
-                                                self.setting_config = Some(SettingConfig::Cluster);
-                                                self.clusters = OptionList::new();
-                                                self.services = OptionList::new();
-                                                self.cluster.clear();
-                                                self.service.clear();
-                                                self.service_events = OptionList::new();
-                                            }
-                                        }
-                                        SettingConfig::Cluster => {
-                                            if self.clusters.selected().is_some() {
-                                                self.cluster =
-                                                    self.clusters.selected().unwrap().to_string();
-                                                self.setting_config = Some(SettingConfig::Service);
-                                                self.services = OptionList::new();
-                                                self.service.clear();
-                                            }
-                                        }
-                                        SettingConfig::Service => {
-                                            if self.services.selected().is_some() {
-                                                self.service =
-                                                    self.services.selected().unwrap().to_string();
-                                                self.current_screen = CurrentScreen::Main;
-                                                self.setting_config = None;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            KeyCode::Down => {
-                                if let Some(setting_config) = &self.setting_config {
-                                    match setting_config {
-                                        SettingConfig::Profile => {
-                                            let previously_selected =
-                                                self.profiles.state.selected();
-                                            self.profiles.next();
-
-                                            if self.profiles.state.selected() != previously_selected
-                                            {
-                                                self.profile_box.vertical_scroll = self
-                                                    .profile_box
-                                                    .vertical_scroll
-                                                    .saturating_add(1);
-                                                self.profile_box.vertical_scroll_state = self
-                                                    .profile_box
-                                                    .vertical_scroll_state
-                                                    .position(self.profile_box.vertical_scroll);
-                                            }
-                                        }
-                                        SettingConfig::Cluster => {
-                                            let previously_selected =
-                                                self.clusters.state.selected();
-                                            self.clusters.next();
-                                            if self.clusters.state.selected() != previously_selected
-                                            {
-                                                self.cluster_box.vertical_scroll = self
-                                                    .cluster_box
-                                                    .vertical_scroll
-                                                    .saturating_add(1);
-                                                self.cluster_box.vertical_scroll_state = self
-                                                    .cluster_box
-                                                    .vertical_scroll_state
-                                                    .position(self.cluster_box.vertical_scroll);
-                                            }
-                                        }
-                                        SettingConfig::Service => {
-                                            let previously_selected =
-                                                self.services.state.selected();
-                                            self.services.next();
-                                            if self.services.state.selected() != previously_selected
-                                            {
-                                                self.service_box.vertical_scroll = self
-                                                    .service_box
-                                                    .vertical_scroll
-                                                    .saturating_add(1);
-                                                self.service_box.vertical_scroll_state = self
-                                                    .service_box
-                                                    .vertical_scroll_state
-                                                    .position(self.service_box.vertical_scroll);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            KeyCode::Up => {
-                                if let Some(setting_config) = &self.setting_config {
-                                    match setting_config {
-                                        SettingConfig::Profile => {
-                                            let previously_selected =
-                                                self.profiles.state.selected();
-                                            self.profiles.previous();
-                                            if self.profiles.state.selected() != previously_selected
-                                            {
-                                                self.profile_box.vertical_scroll = self
-                                                    .profile_box
-                                                    .vertical_scroll
-                                                    .saturating_sub(1);
-                                                self.profile_box.vertical_scroll_state = self
-                                                    .profile_box
-                                                    .vertical_scroll_state
-                                                    .position(self.profile_box.vertical_scroll);
-                                            }
-                                        }
-                                        SettingConfig::Cluster => {
-                                            let previously_selected =
-                                                self.clusters.state.selected();
-                                            self.clusters.previous();
-                                            if self.clusters.state.selected() != previously_selected
-                                            {
-                                                self.cluster_box.vertical_scroll = self
-                                                    .cluster_box
-                                                    .vertical_scroll
-                                                    .saturating_sub(1);
-                                                self.cluster_box.vertical_scroll_state = self
-                                                    .cluster_box
-                                                    .vertical_scroll_state
-                                                    .position(self.cluster_box.vertical_scroll);
-                                            }
-                                        }
-                                        SettingConfig::Service => {
-                                            let previously_selected =
-                                                self.services.state.selected();
-                                            self.services.previous();
-                                            if self.services.state.selected() != previously_selected
-                                            {
-                                                self.service_box.vertical_scroll = self
-                                                    .service_box
-                                                    .vertical_scroll
-                                                    .saturating_sub(1);
-                                                self.service_box.vertical_scroll_state = self
-                                                    .service_box
-                                                    .vertical_scroll_state
-                                                    .position(self.service_box.vertical_scroll);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        },
+                        }
+                        CurrentScreen::LogDetails => {
+                            log_details_keymaps(key, self);
+                        }
+                        CurrentScreen::SettingConfig => {
+                            setting_config_keymaps(key, self);
+                        }
                     }
                     dirty = true;
                 }
@@ -408,19 +255,25 @@ impl App {
                     .profile_name(&self.profile)
                     .load()
                     .await;
-                let client = Client::new(&aws_config);
-                if let Ok(service) = get_services(&client, &self.cluster).await {
+                let ecs_client = aws_sdk_ecs::Client::new(&aws_config);
+                let cw_client = aws_sdk_cloudwatchlogs::Client::new(&aws_config);
+                if let Ok(service) = get_services(&ecs_client, &self.cluster).await {
                     if let Some(services) = service.services {
                         if let Some(service_obj) = services
                             .iter()
                             .find(|s| s.service_name().unwrap_or_default() == self.service)
                         {
-                            if let Ok(events) = get_events(service_obj).await {
+                            let log_group = get_log_group_name(&ecs_client, service_obj).await;
+                            if let Ok(events) = get_logs(&cw_client, &log_group.unwrap()).await {
                                 self.service_events = OptionList::from_iter(events);
                                 self.event_box.vertical_scroll_state = self
                                     .event_box
                                     .vertical_scroll_state
-                                    .content_length(self.service_events.items.len());
+                                    .content_length(self.service_events.items.len())
+                                    .position(self.service_events.items.len());
+                                self.service_events.state.select(Some(
+                                    self.service_events.items.len().saturating_sub(1),
+                                ));
                             }
                         }
                     }

@@ -64,7 +64,7 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
         && matches!(app.current_screen, CurrentScreen::Main)
     {
         event_block = Block::default()
-            .title(" Service Events - (e) to unfocus - (r) to refresh ")
+            .title(" Service Events - (e) to unfocus - (r) to refresh - (Enter) for details ")
             .borders(Borders::ALL)
             .style(Style::default().fg(Theme::default().green));
     } else if app.viewing_logs
@@ -96,6 +96,19 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
     let event_list_scrollbar = Scrollbar::default()
         .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)
         .style(Style::default().bg(Theme::default().selection));
+
+    let selected = app.service_events.state.selected().unwrap_or(0);
+
+    if selected < app.event_box.vertical_scroll {
+        app.event_box.vertical_scroll = selected;
+    } else if selected > app.event_box.vertical_scroll {
+        app.event_box.vertical_scroll = selected - 1;
+    }
+
+    app.event_box.vertical_scroll_state = app
+        .event_box
+        .vertical_scroll_state
+        .position(app.event_box.vertical_scroll);
 
     if !app.profile.is_empty()
         && !app.cluster.is_empty()
@@ -129,6 +142,9 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
                 "Set Data Source",
                 Style::default().fg(Theme::default().yellow),
             ),
+            CurrentScreen::LogDetails => {
+                Span::styled("Log Details", Style::default().fg(Theme::default().green))
+            }
             CurrentScreen::Exiting => {
                 Span::styled("Exiting", Style::default().fg(Theme::default().red))
             }
@@ -173,6 +189,10 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
             ),
             CurrentScreen::SettingConfig => Span::styled(
                 "(ESC) to cancel/(Tab) to switch boxes/enter to complete",
+                Style::default().fg(Theme::default().red),
+            ),
+            CurrentScreen::LogDetails => Span::styled(
+                "(ESC) to go back",
                 Style::default().fg(Theme::default().red),
             ),
             CurrentScreen::Exiting => Span::styled(
@@ -384,6 +404,28 @@ pub fn ui(frame: &mut Frame, app: &mut App) {
             );
         }
     }
+    if let CurrentScreen::LogDetails = app.current_screen {
+        frame.render_widget(Clear, frame.area()); //this clears the entire screen and anything already drawn
+        let popup_block = Block::default()
+            .title(" Log Details (ESC to go back) ")
+            .padding(Padding::new(1, 1, 1, 1))
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Theme::default().selection));
+
+        let log_text = if let Some(selected) = app.service_events.selected() {
+            Text::styled(selected, Style::default().fg(Theme::default().foreground))
+        } else {
+            Text::styled("No log selected", Style::default().fg(Theme::default().red))
+        };
+        // the `trim: false` will stop the text from being cut off when over the edge of the block
+        let log_paragraph = Paragraph::new(log_text)
+            .block(popup_block)
+            .wrap(Wrap { trim: false });
+
+        let area = centered_rect(80, 80, frame.area());
+        frame.render_widget(log_paragraph, area);
+    }
+
     if let CurrentScreen::Exiting = app.current_screen {
         frame.render_widget(Clear, frame.area()); //this clears the entire screen and anything already drawn
         let popup_block = Block::default()
