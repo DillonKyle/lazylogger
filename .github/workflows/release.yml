@@ -30,7 +30,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        # Arguments to pass in
         with:
           # Make Rust compile to our target (defined in the matrix)
           targets: ${{ matrix.target }}
@@ -46,7 +45,6 @@ jobs:
       - name: Build archive
         shell: bash
         run: |
-          # Replace with the name of your binary
           binary_name="lazylogger"
 
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"

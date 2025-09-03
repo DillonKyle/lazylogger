@@ -9,7 +9,6 @@ ARCH="$(uname -m)"
 VERSION=$(curl -s https://api.github.com/repos/$REPO/releases/latest |
   grep -Po '"tag_name": "\K.*?(?=")')
 
-# Detect OS
 case "$OS" in
 Linux*) PLATFORM="unknown-linux-musl" ;;
 Darwin*) PLATFORM="apple-darwin" ;;
@@ -19,7 +18,6 @@ Darwin*) PLATFORM="apple-darwin" ;;
   ;;
 esac
 
-# Detect arch
 case "$ARCH" in
 x86_64) ARCH="x86_64" ;;
 *)
@@ -28,17 +26,13 @@ x86_64) ARCH="x86_64" ;;
   ;;
 esac
 
-# Latest release tarball URL from GitHub
 URL="https://github.com/$REPO/releases/latest/download/${BIN_NAME}-${VERSION}-${ARCH}-${PLATFORM}.tar.gz"
 
 echo "Downloading $URL..."
 mkdir -p "$INSTALL_DIR"
-curl -L "$URL" | tar -xz -C "$INSTALL_DIR"
-
-# Ensure executable
+curl -L "$URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/$BIN_NAME"
 
-# Ensure install dir is in PATH
 if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
   echo "Add this to your shell rc file (e.g. ~/.bashrc or ~/.zshrc):"
   echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
